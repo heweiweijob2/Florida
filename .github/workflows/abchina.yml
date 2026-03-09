@@ -1,0 +1,112 @@
+name: Build Florida Frida Server
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      frida_version:
+        description: 'Frida 版本 (默认: 17.7.2)'
+        required: true
+        default: '17.7.2'
+      android_version:
+        description: 'Android 版本 (默认: 17.2.0)'
+        required: true
+        default: '17.2.0'
+      architecture:
+        description: '目标架构'
+        required: true
+        default: 'arm64'
+        type: choice
+        options:
+          - arm64
+          - arm
+          - x86_64
+          - x86
+      custom_name:
+        description: '自定义名称 (替换 frida 字符串)'
+        required: true
+        default: 'system'
+      custom_port:
+        description: '自定义端口'
+        required: true
+        default: '35791'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: 检查代码
+      uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+        
+    - name: 安装依赖
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          python3 python3-pip \
+          git curl unzip make \
+          build-essential cmake \
+          ninja-build meson \
+          gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
+          openjdk-17-jdk
+        
+    - name: 设置 Python 环境
+      run: |
+        python3 -m venv venv
+        source venv/bin/activate
+        pip install -r requirements.txt
+        
+    - name: 下载 Frida 源码
+      run: |
+        source venv/bin/activate
+        python3 scripts/download.py --version ${{ github.event.inputs.frida_version }}
+        
+    - name: 应用补丁
+      run: |
+        source venv/bin/activate
+        python3 scripts/patch.py \
+          --name ${{ github.event.inputs.custom_name }} \
+          --port ${{ github.event.inputs.custom_port }} \
+          --android ${{ github.event.inputs.android_version }}
+        
+    - name: 构建 frida-server
+      run: |
+        source venv/bin/activate
+        python3 scripts/build.py \
+          --arch ${{ github.event.inputs.architecture }} \
+          --version ${{ github.event.inputs.frida_version }} \
+          --android ${{ github.event.inputs.android_version }}
+        
+    - name: 打包构建产物
+      run: |
+        mkdir -p output
+        cp build/${{ github.event.inputs.architecture }}/frida-server output/
+        cp build/${{ github.event.inputs.architecture }}/${{ github.event.inputs.custom_name }}-server output/
+        zip -r florida-server-${{ github.event.inputs.frida_version }}-${{ github.event.inputs.architecture }}.zip output/
+        
+    - name: 上传构建产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: florida-server-${{ github.event.inputs.frida_version }}-${{ github.event.inputs.architecture }}
+        path: florida-server-${{ github.event.inputs.frida_version }}-${{ github.event.inputs.architecture }}.zip
+        
+    - name: 发布 Release
+      if: github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v2
+      with:
+        files: florida-server-${{ github.event.inputs.frida_version }}-${{ github.event.inputs.architecture }}.zip
+        tag_name: v${{ github.event.inputs.frida_version }}-${{ github.run_number }}
+        name: Florida Server v${{ github.event.inputs.frida_version }}
+        body: |
+          Florida 反检测 Frida Server
+          - Frida 版本: ${{ github.event.inputs.frida_version }}
+          - Android 版本: ${{ github.event.inputs.android_version }}
+          - 架构: ${{ github.event.inputs.architecture }}
+          - 自定义名称: ${{ github.event.inputs.custom_name }}
+          - 自定义端口: ${{ github.event.inputs.custom_port }}
